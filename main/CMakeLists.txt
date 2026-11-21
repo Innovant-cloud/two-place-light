@@ -1,16 +1,15 @@
 idf_component_register(
     SRCS "main.c"
-         "demo_navigation.c"
-         "ui_pixel.c"
-         "ui_pixel_math.c"
-         "demo_display.c"
-         "demo_button.c"
-         "demo_audio.c"
-         "demo_battery.c"
-         "demo_radio.c"
-         "demo_wifi.c"
-         "demo_ble.c"
-         "demo_low_power.c"
+         "solar.c"
+         "civil_time.c"
+         "places.c"
+         "app_clock.c"
+         "app_state.c"
+         "app_setup.c"
+         "ui.c"
     INCLUDE_DIRS "."
-    REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash
+    REQUIRES bsp nvs_flash
 )
+
+# 基线 main 的测试菜单与 demo_*.c 仍留在树里作参考，但不参与本应用的构建。
+# 派生应用禁止沿用那套测试 UI，详见 docs/development/ai-guide.md。

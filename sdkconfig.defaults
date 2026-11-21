@@ -32,15 +32,11 @@ CONFIG_LV_USE_CLIB_MALLOC=y
 
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000
+# 本应用只有"分钟级"的时间需求：走 RTC 时基就够了，而且 RTC 在深睡眠期间继续
+# 走时。板子没有独立 RTC 芯片，整机断电后仍需重新对时（见 app_clock.h）。
+CONFIG_NEWLIB_TIME_SYSCALL_USE_RTC=y
 
-# --- Bluetooth LE / NimBLE ---
-# ESP32-C3 仅支持 BLE；示例只启用单连接 peripheral 所需的最小 host 配置。
-CONFIG_BT_ENABLED=y
-CONFIG_BT_NIMBLE_ENABLED=y
-CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
-CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
-CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
-CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
-CONFIG_BT_NIMBLE_HOST_BASED_PRIVACY=n
-CONFIG_BT_NIMBLE_NVS_PERSIST=n
+# --- Bluetooth LE ---
+# 「两地光」不联网、不用 BLE，关掉可省下协议栈的 Flash 与内部 RAM。
+# 需要 BLE 时把它改回 y，并保留基线 demo 的 NimBLE 配置。
+CONFIG_BT_ENABLED=n

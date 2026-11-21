@@ -75,6 +75,23 @@ run_static_checks() {
             -o "${test_dir}/test_demo_${demo}_runtime"
         "${test_dir}/test_demo_${demo}_runtime"
     done
+    # Two-Place Light 的纯逻辑测试（太阳几何 / 日历 / 按键状态机 / 对时页）。
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_solar.c main/solar.c main/civil_time.c main/places.c \
+        -o "${test_dir}/test_solar" -lm
+    "${test_dir}/test_solar"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_civil_time.c main/civil_time.c \
+        -o "${test_dir}/test_civil_time"
+    "${test_dir}/test_civil_time"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_app_state.c main/app_state.c \
+        -o "${test_dir}/test_app_state"
+    "${test_dir}/test_app_state"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_app_setup.c main/app_setup.c main/civil_time.c main/places.c \
+        -o "${test_dir}/test_app_setup"
+    "${test_dir}/test_app_setup"
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_battery_profile.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_deep_sleep_contract.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_key_wake_contract.py
