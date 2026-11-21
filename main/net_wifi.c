@@ -22,7 +22,8 @@ static const char *TAG = "net_wifi";
 #define CRED_KEY_PASS "pass"
 
 #define AP_SSID "TwoPlaceLight"
-#define AP_PASSWORD "twoplacelight" // WPA2 最少 8 字节
+// WPA2 要求 8..63 字节；这个字符串是阿渊定的，就按他的来。
+#define AP_PASSWORD "lingan-is-so-cute"
 #define POLL_PERIOD_MS 100
 
 static esp_netif_t *s_sta_netif;

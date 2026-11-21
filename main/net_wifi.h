@@ -2,7 +2,7 @@
 //
 // 两条路：
 //   1. STA：用 NVS 里存着的凭证连路由器，等 DHCP 给出 IP。
-//   2. 配网：开一个 SoftAP（TwoPlaceLight / twoplacelight），手机上打开
+//   2. 配网：开一个 SoftAP（TwoPlaceLight / lingan-is-so-cute），手机上打开
 //      http://192.168.4.1 填 Wi-Fi 名和密码，设备存进 NVS 后重启，再走路径 1。
 //
 // 没网也能用：对时的最后手段仍是三键手动对时（app_setup.c）。

@@ -38,7 +38,7 @@ Three ways to obtain a credible clock, tried in this order when the RTC holds no
    `ntp.aliyun.com`; a successful sync writes the RTC. Both places are UTC+8, so no timezone
    table is needed.
 2. **Provisioning hotspot.** Without credentials — or when joining fails — it opens a SoftAP
-   `TwoPlaceLight` (WPA2, password `twoplacelight`). Join it from a phone, open
+   `TwoPlaceLight` (WPA2, password `lingan-is-so-cute`). Join it from a phone, open
    `http://192.168.4.1`, enter the Wi-Fi name and password; the device stores them in NVS and
    restarts. The setup page is reachable by anyone in radio range while it is open, so it is a
    provisioning window, not a permanent service.
