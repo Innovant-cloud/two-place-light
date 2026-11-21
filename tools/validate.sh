@@ -92,6 +92,10 @@ run_static_checks() {
         tests/test_app_setup.c main/app_setup.c main/civil_time.c main/places.c \
         -o "${test_dir}/test_app_setup"
     "${test_dir}/test_app_setup"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_prov_parse.c main/prov_parse.c \
+        -o "${test_dir}/test_prov_parse"
+    "${test_dir}/test_prov_parse"
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_battery_profile.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_deep_sleep_contract.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_key_wake_contract.py

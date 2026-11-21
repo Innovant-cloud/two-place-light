@@ -7,8 +7,11 @@ idf_component_register(
          "app_state.c"
          "app_setup.c"
          "ui.c"
+         "net_wifi.c"
+         "net_time.c"
+         "prov_parse.c"
     INCLUDE_DIRS "."
-    REQUIRES bsp nvs_flash
+    REQUIRES bsp nvs_flash esp_wifi esp_netif esp_event esp_http_server
 )
 
 # 基线 main 的测试菜单与 demo_*.c 仍留在树里作参考，但不参与本应用的构建。

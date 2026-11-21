@@ -39,6 +39,7 @@
 
 static app_view_t s_view = APP_VIEW_ARC;
 static bool s_setup_mode;
+static bool s_net_mode;
 static app_setup_t s_setup;
 
 static lv_obj_t *s_scr;
@@ -61,6 +62,8 @@ static lv_obj_t *s_left_sub;
 static lv_obj_t *s_left_next;
 
 static lv_obj_t *s_setup_fields[SETUP_FIELD_COUNT];
+static lv_obj_t *s_net_l1;
+static lv_obj_t *s_net_l2;
 
 // ---------------------------------------------------------------- 小工具
 
@@ -411,11 +414,38 @@ static void setup_update(void) {
     }
 }
 
+// ---------------------------------------------------------------- 联网页
+
+static void net_build(const char *title, const char *line1, const char *line2) {
+    begin_screen();
+    add_header(s_scr, title);
+
+    s_net_l1 = make_label(s_scr, &lv_font_montserrat_20, COL_INK);
+    lv_label_set_text(s_net_l1, line1 == NULL ? "" : line1);
+    lv_obj_set_style_text_align(s_net_l1, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_net_l1, LV_ALIGN_TOP_MID, 0, 120);
+
+    s_net_l2 = make_label(s_scr, &lv_font_montserrat_14, COL_DIM);
+    lv_label_set_text(s_net_l2, line2 == NULL ? "" : line2);
+    lv_obj_set_style_text_align(s_net_l2, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_net_l2, LV_ALIGN_TOP_MID, 0, 156);
+
+    lv_obj_t *hint = make_label(s_scr, &lv_font_montserrat_14, COL_DIM);
+    lv_label_set_text(hint, "HOLD OK: MANUAL SET");
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -8);
+}
+
+void ui_show_net(const char *title, const char *line1, const char *line2) {
+    s_net_mode = true;
+    net_build(title, line1, line2);
+}
+
 // ---------------------------------------------------------------- 公共入口
 
 void ui_show_view(app_view_t view) {
     s_view = view;
     s_setup_mode = false;
+    s_net_mode = false;
     switch (view) {
     case APP_VIEW_PAIR:
         pair_build();
@@ -435,6 +465,7 @@ void ui_show_setup(const app_setup_t *setup) {
     if (setup == NULL) return;
     s_setup = *setup;
     s_setup_mode = true;
+    s_net_mode = false;
     setup_build();
 }
 
@@ -451,6 +482,11 @@ static void update_battery(void) {
 
 void ui_refresh(void) {
     if (s_scr == NULL) return;
+
+    if (s_net_mode) {
+        update_battery();
+        return;
+    }
 
     if (s_setup_mode) {
         setup_update();

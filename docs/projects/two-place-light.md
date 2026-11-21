@@ -6,8 +6,9 @@ A small desk device that only cares about light: it shows how high the sun stand
 **Weihai** (home) and **Tianjin** (school) right now, when the sun comes up and goes down in
 each place, and how much daylight is left today.
 
-Everything is computed on the MCU. No network, no image assets, no audio, no fonts beyond the
-two Montserrat sizes the baseline already enables.
+All of the astronomy is computed on the MCU. There are no image assets, no audio, and no fonts
+beyond the two Montserrat sizes the baseline already enables. The network is used for one thing
+only: setting the clock.
 
 ## Controls
 
@@ -16,38 +17,38 @@ two Montserrat sizes the baseline already enables.
 | `UP` / `DOWN` | previous / next page |
 | `OK` (short) | cycle backlight 100% → 60% → 30% |
 | `OK` (hold) | screen off; any key wakes it again |
-| `UP` / `DOWN` in the set-time page | adjust the highlighted field |
-| `OK` (short) in the set-time page | next field, and *commit* on the last field |
-| `OK` (hold) in the set-time page | cancel |
+| `OK` (hold) while acquiring time | give up on Wi-Fi, use manual set-time |
+| `UP` / `DOWN` on the set-time page | adjust the highlighted field |
+| `OK` (short) on the set-time page | next field, and *commit* on the last field |
+| `OK` (hold) on the set-time page | cancel |
 
 ## Pages
 
 1. **ARC** — the sun's elevation over the whole local day as a curve, a horizon line, and two
-   markers at the current time: solid = Weihai, ring = Tianjin.
+   markers at the current time: `*` solid = Weihai, `o` ring = Tianjin.
 2. **PAIR** — numbers side by side: elevation now, sunrise, sunset, and which place is brighter.
 3. **LEFT** — countdown to the next sunset or sunrise, civil dawn/dusk, and how much longer or
    shorter tomorrow's daylight is.
 
 ## Time
 
-The board has no dedicated RTC chip. Time comes from the ESP32-C3 RTC through newlib
-(`CONFIG_NEWLIB_TIME_SYSCALL_USE_RTC`), which survives deep sleep — but that only matters once
-idle sleep exists, and **it does not yet**. Until then the device refreshes once a second while
-awake and the RTC is lost on a real power cycle.
+Three ways to obtain a credible clock, tried in this order when the RTC holds nothing usable:
 
-Because no input channel other than the three buttons has ever been verified in this repository,
-setting the clock is a three-button flow: the device boots into the set-time page whenever the RTC
-holds no credible time, and pre-fills the last sync timestamp stored in NVS as a starting point.
-Nothing pretends the time is known when it is not.
+1. **Wi-Fi + SNTP.** With stored credentials the device joins the network and asks
+   `ntp.aliyun.com`; a successful sync writes the RTC. Both places are UTC+8, so no timezone
+   table is needed.
+2. **Provisioning hotspot.** Without credentials — or when joining fails — it opens a SoftAP
+   `TwoPlaceLight` (WPA2, password `twoplacelight`). Join it from a phone, open
+   `http://192.168.4.1`, enter the Wi-Fi name and password; the device stores them in NVS and
+   restarts. The setup page is reachable by anyone in radio range while it is open, so it is a
+   provisioning window, not a permanent service.
+3. **Three buttons.** Holding `OK` during steps 1–2 skips the network entirely: `UP`/`DOWN`
+   adjust the field, `OK` advances, `OK` on the minute field commits, holding `OK` cancels.
 
-## Not implemented yet
-
-- Idle deep sleep (`bsp_display_prepare_deep_sleep` + `bsp_button_prepare_deep_sleep` + the
-  key-wake guard from `main/key_guard.h`). Without it the device draws its full runtime current
-  continuously, which a 500 mAh cell will not enjoy.
-- Persisting the backlight step across reboots.
-- Chinese labels; see the font checklist before adding any.
-
+The board has no dedicated RTC chip. Time is kept by the ESP32-C3 RTC through newlib
+(`CONFIG_NEWLIB_TIME_SYSCALL_USE_RTC`), which survives deep sleep but is lost on a real power
+cycle — hence the boot sequence above. A clock that is not credible shows `--:--`; nothing is
+guessed.
 
 ## Files
 
@@ -59,12 +60,24 @@ Nothing pretends the time is known when it is not.
 | `main/app_clock.c` | RTC read/write plus the last-sync record in NVS |
 | `main/app_state.c` | page and backlight state machine |
 | `main/app_setup.c` | three-button set-time state machine |
-| `main/ui.c` | the four screens |
+| `main/net_wifi.c` | STA join, provisioning SoftAP + HTTP form, NVS credentials |
+| `main/net_time.c` | SNTP sync |
+| `main/prov_parse.c` | provisioning form parsing (URL decoding, length rules) |
+| `main/ui.c` | the five screens |
 
 `main/demo_*.c` and the baseline pixel menu remain in the tree for reference but are no longer
 compiled: derivative applications must ship their own UI.
 
+## Not implemented yet
+
+- Background re-sync: the device only syncs at boot, and only when the clock is not credible.
+- Idle deep sleep (`bsp_display_prepare_deep_sleep` + `bsp_button_prepare_deep_sleep` + the
+  key-wake guard in `main/key_guard.h`). Without it the device draws full runtime current
+  continuously.
+- Persisting the backlight step across reboots.
+- Chinese labels; see the font checklist before adding any.
+
 ## Changing the places
 
-Edit `main/places.c`. Coordinates are city-centre approximations (±0.05°), which is far below
-one minute of sunrise accuracy.
+Edit `main/places.c`. Coordinates are city-centre approximations (±0.05°), which is far below one
+minute of sunrise accuracy.
