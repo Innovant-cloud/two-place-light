@@ -1,6 +1,8 @@
 // main/app_state.c
 #include "app_state.h"
 
+#include <stddef.h>
+
 const uint8_t APP_BRIGHTNESS_PERCENT[APP_BRIGHTNESS_STEPS] = {100, 60, 30};
 
 void app_state_init(app_state_t *state, uint8_t brightness_step) {

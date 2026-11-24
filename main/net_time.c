@@ -3,7 +3,7 @@
 
 #include "app_clock.h"
 #include "esp_log.h"
-#include "esp_sntp.h"
+#include "esp_netif_sntp.h"
 #include "freertos/FreeRTOS.h"
 
 static const char *TAG = "net_time";
@@ -12,9 +12,10 @@ static const char *TAG = "net_time";
 #define NTP_SERVER_PRIMARY "ntp.aliyun.com"
 
 esp_err_t net_time_sync(uint32_t timeout_ms) {
+    // ESP_NETIF_SNTP_DEFAULT_CONFIG 已带上 start=true、smooth_sync=false、
+    // wait_for_sync=true：没有 wait_for_sync，下面的 sync_wait 会直接返回
+    // ESP_ERR_INVALID_STATE，所以这里不再手改这几个字段。
     esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG(NTP_SERVER_PRIMARY);
-    cfg.start = true;       // 初始化后立即开始
-    cfg.smooth_sync = false; // 直接跳到正确时间，不做缓慢收敛
 
     esp_err_t err = esp_netif_sntp_init(&cfg);
     if (err != ESP_OK) {
