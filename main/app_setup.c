@@ -1,6 +1,8 @@
 // main/app_setup.c
 #include "app_setup.h"
 
+#include <stddef.h> // NULL 不依赖任何间接包含
+
 #include "civil_time.h"
 #include "places.h"
 

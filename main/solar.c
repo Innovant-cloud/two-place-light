@@ -2,6 +2,7 @@
 #include "solar.h"
 
 #include <math.h>
+#include <stddef.h> // NULL：glibc 的 math.h 不带，newlib 的带
 
 #define SOLAR_PI 3.14159265358979323846
 
