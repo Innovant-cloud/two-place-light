@@ -89,7 +89,9 @@ int main(void) {
 
     // 8. 高度角：正午为正、子夜为负，且方位角落在 0..360。
     const int64_t midnight = day_epoch(2026, 11, 21);
-    const int64_t noon_utc = midnight + 4 * 3600; // 12:00 本地 = 04:00 UTC
+    // midnight 是"本地零点"对应的 UTC 时刻（16:00 UTC），所以本地正午要再加 12 小时；
+    // 这里原来写的是 4 小时（把 midnight 当成了 UTC 零点），断言因此在 CI 上失败。
+    const int64_t noon_utc = midnight + 12 * 3600;
     assert(solar_elevation_deg(noon_utc, lat, lon) > 25.0);
     assert(solar_elevation_deg(midnight, lat, lon) < 0.0);
     const double az = solar_azimuth_deg(noon_utc, lat, lon);
