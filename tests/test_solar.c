@@ -11,7 +11,7 @@
 #include "places.h"
 #include "solar.h"
 
-#define TZ PLACE_TZ_OFFSET_MIN
+#define TZ PLACES_DEFAULT_TZ_OFFSET_MIN
 
 static int64_t day_epoch(int y, int m, int d) {
     int64_t epoch = 0;
@@ -27,8 +27,8 @@ static solar_day_t day_of(int y, int m, int d, double lat, double lon) {
 }
 
 int main(void) {
-    const double lat = PLACES[PLACE_WEIHAI].lat_deg;
-    const double lon = PLACES[PLACE_WEIHAI].lon_deg;
+    const double lat = PLACES_DEFAULT[PLACE_PRIMARY].lat_deg;
+    const double lon = PLACES_DEFAULT[PLACE_PRIMARY].lon_deg;
 
     // 1. 赤纬的周年范围：二至约 ±23.44°，春分接近 0°。
     const solar_day_t summer = day_of(2026, 6, 21, lat, lon);
@@ -70,8 +70,8 @@ int main(void) {
     assert(fabs(winter.day_length_min - 574.0) < 2.0);
 
     // 6. 天津比威海稍南、稍西：同一天日出更晚、日照更短（11 月下旬）。
-    const solar_day_t tj = day_of(2026, 11, 21, PLACES[PLACE_TIANJIN].lat_deg,
-                                  PLACES[PLACE_TIANJIN].lon_deg);
+    const solar_day_t tj = day_of(2026, 11, 21, PLACES_DEFAULT[PLACE_SECONDARY].lat_deg,
+                                  PLACES_DEFAULT[PLACE_SECONDARY].lon_deg);
     const solar_day_t wh = day_of(2026, 11, 21, lat, lon);
     assert(tj.rise_min > wh.rise_min);
     assert(tj.day_length_min < wh.day_length_min);

@@ -2,6 +2,7 @@
 #include "net_wifi.h"
 
 #include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_event.h"
@@ -13,6 +14,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs.h"
+#include "places.h"
+#include "places_store.h"
 #include "prov_parse.h"
 
 static const char *TAG = "net_wifi";
@@ -26,6 +29,11 @@ static const char *TAG = "net_wifi";
 #define AP_PASSWORD "lingan-is-so-cute"
 #define POLL_PERIOD_MS 100
 
+// 设置页正文上限：九个字段，URL 编码后还有余量。
+#define PORTAL_BODY_MAX 512
+// 生成的 HTML：九个输入框 + 样式，1.5 KB 上下，留足余量。
+#define PORTAL_PAGE_MAX 2048
+
 static esp_netif_t *s_sta_netif;
 static esp_netif_t *s_ap_netif;
 static httpd_handle_t s_httpd;
@@ -35,7 +43,7 @@ static bool s_wifi_inited;
 static bool s_wifi_running;
 static bool s_handlers_registered;
 static volatile bool s_got_ip;
-static volatile bool s_provisioned;
+static volatile bool s_saved;
 
 // ------------------------------------------------------------------ 网络栈
 
@@ -111,7 +119,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         s_got_ip = false;
         ESP_LOGW(TAG, "STA 断开");
     } else if (id == WIFI_EVENT_AP_STACONNECTED) {
-        ESP_LOGI(TAG, "有设备连上配网热点");
+        ESP_LOGI(TAG, "有设备连上设置热点");
     }
 }
 
@@ -216,64 +224,160 @@ esp_err_t net_connect_sta(uint32_t timeout_ms, net_cancel_cb_t cancel) {
     return ESP_ERR_TIMEOUT;
 }
 
-// ------------------------------------------------------------------ 配网页
+// ------------------------------------------------------------------ 设置页
 
-static const char PROV_PAGE[] =
-    "<!doctype html><html><head><meta charset=utf-8>"
-    "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
-    "<title>Two-Place Light</title><style>"
-    "body{font-family:system-ui,sans-serif;background:#0a1420;color:#e7eef8;padding:24px;"
-    "max-width:420px;margin:0 auto}h1{font-size:20px;color:#4fb6ff}"
-    "label{display:block;margin-top:16px;font-size:14px;color:#9fb0c4}"
-    "input{width:100%;box-sizing:border-box;padding:10px;margin-top:6px;border:0;border-radius:6px;"
-    "font-size:16px}button{width:100%;margin-top:24px;padding:12px;border:0;border-radius:6px;"
-    "background:#4fb6ff;color:#08202f;font-size:16px;font-weight:600}"
-    "p{font-size:12px;color:#6b7a8d}</style></head><body>"
-    "<h1>Two-Place Light</h1>"
-    "<form method=post action=/save>"
-    "<label>Wi-Fi name</label><input name=ssid maxlength=32 required autofocus>"
-    "<label>Password</label><input name=pass type=password maxlength=63>"
-    "<button type=submit>Save and restart</button></form>"
-    "<p>Leave the password empty for an open network.</p>"
-    "</body></html>";
+// 值会被塞进 HTML 属性里：转义掉能提前闭合属性或标签的字符。
+// 城市名已经过 places_name_valid() 白名单校验，这里一并处理是为了将来放宽时不用回头改。
+static void escape_attr(char *dst, size_t cap, const char *src) {
+    size_t out = 0;
+    if (cap == 0) return;
+    for (size_t i = 0; src != NULL && src[i] != '\0' && out + 7 < cap; i++) {
+        const char *rep = NULL;
+        size_t rep_len = 0;
+        switch (src[i]) {
+        case '&': rep = "&amp;"; rep_len = 5; break;
+        case '<': rep = "&lt;"; rep_len = 4; break;
+        case '>': rep = "&gt;"; rep_len = 4; break;
+        case '"': rep = "&quot;"; rep_len = 6; break;
+        case '\'': rep = "&#39;"; rep_len = 5; break;
+        default: dst[out++] = src[i]; break;
+        }
+        if (rep != NULL) {
+            memcpy(dst + out, rep, rep_len);
+            out += rep_len;
+        }
+    }
+    dst[out] = '\0';
+}
+
+static char s_page[PORTAL_PAGE_MAX];
+
+static void build_page(void) {
+    const place_t *primary = places_get(PLACE_PRIMARY);
+    const place_t *secondary = places_get(PLACE_SECONDARY);
+
+    char ssid[40] = {0};
+    char pass[8] = {0};
+    if (!load_credentials(ssid, sizeof ssid, pass, sizeof pass)) {
+        ssid[0] = '\0'; // 还没配过：留空让用户填
+    }
+
+    char ssid_esc[240];
+    char primary_esc[80];
+    char secondary_esc[80];
+    escape_attr(ssid_esc, sizeof ssid_esc, ssid);
+    escape_attr(primary_esc, sizeof primary_esc, primary->name);
+    escape_attr(secondary_esc, sizeof secondary_esc, secondary->name);
+
+    const int written = snprintf(
+        s_page, sizeof s_page,
+        "<!doctype html><html><head><meta charset=utf-8>"
+        "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
+        "<title>Two-Place Light</title><style>"
+        "body{font-family:system-ui,sans-serif;background:#0a1420;color:#e7eef8;padding:20px;"
+        "max-width:460px;margin:0 auto}h1{font-size:19px;color:#4fb6ff}"
+        "h2{font-size:14px;margin:22px 0 0;color:#9fb0c4}"
+        "label{display:block;margin-top:12px;font-size:13px;color:#9fb0c4}"
+        "input{width:100%%;box-sizing:border-box;padding:9px;margin-top:5px;border:0;"
+        "border-radius:6px;font-size:15px}"
+        "button{width:100%%;margin-top:24px;padding:12px;border:0;border-radius:6px;"
+        "background:#4fb6ff;color:#08202f;font-size:16px;font-weight:600}"
+        "p{font-size:12px;color:#6b7a8d}</style></head><body>"
+        "<h1>Two-Place Light</h1><form method=post action=/save>"
+        "<h2>Two places</h2>"
+        "<p>Names are ASCII only: the screen has no Chinese glyphs. "
+        "Latitude -90..90, longitude -180..180.</p>"
+        "<label>Place 1 name</label><input name=n0 maxlength=12 value=\"%s\" required>"
+        "<label>Place 1 latitude</label><input name=la0 value=\"%.2f\" required>"
+        "<label>Place 1 longitude</label><input name=lo0 value=\"%.2f\" required>"
+        "<label>Place 2 name</label><input name=n1 maxlength=12 value=\"%s\" required>"
+        "<label>Place 2 latitude</label><input name=la1 value=\"%.2f\" required>"
+        "<label>Place 2 longitude</label><input name=lo1 value=\"%.2f\" required>"
+        "<label>UTC offset in minutes (480 = UTC+8)</label>"
+        "<input name=tz value=\"%d\" required>"
+        "<h2>Wi-Fi</h2>"
+        "<p>Leave the name empty to keep the current network.</p>"
+        "<label>Wi-Fi name</label><input name=ssid maxlength=32 value=\"%s\">"
+        "<label>Password</label><input name=pass type=password maxlength=63>"
+        "<button type=submit>Save and restart</button></form>"
+        "<p>Hold DOWN on the device to open this page again.</p>"
+        "</body></html>",
+        primary_esc, primary->lat_deg, primary->lon_deg, secondary_esc, secondary->lat_deg,
+        secondary->lon_deg, places_tz_offset_min(), ssid_esc);
+
+    if (written < 0 || (size_t)written >= sizeof s_page) {
+        // 缓存不够只会让页面缺尾巴，不至于让设置入口消失：记一笔并继续。
+        ESP_LOGW(TAG, "设置页被截断（需要 %d 字节，手上 %u）", written, (unsigned)sizeof s_page);
+    }
+}
 
 static const char SAVED_PAGE[] =
     "<!doctype html><meta charset=utf-8>"
     "<body style=\"font-family:system-ui;background:#0a1420;color:#e7eef8;padding:24px\">"
-    "<h2>Saved</h2><p>The device is restarting and will connect to this network.</p></body>";
+    "<h2>Saved</h2><p>The device is restarting now.</p></body>";
 
 static esp_err_t handle_root(httpd_req_t *req) {
+    build_page();
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, PROV_PAGE, HTTPD_RESP_USE_STRLEN);
+    return httpd_resp_send(req, s_page, HTTPD_RESP_USE_STRLEN);
+}
+
+static const char *message_for(prov_result_t result) {
+    switch (result) {
+    case PROV_ERR_SSID: return "wifi name must be 1-32 bytes";
+    case PROV_ERR_PASS: return "password must be 8-63 bytes or empty";
+    case PROV_ERR_PLACE: return "check the place names and coordinates (ASCII names, lat -90..90)";
+    case PROV_ERR_TZ: return "utc offset must be minutes, -720..840, multiple of 15";
+    case PROV_ERR_BUFFER: return "request too long";
+    case PROV_ERR_FORMAT: return "incomplete form";
+    case PROV_OK: break;
+    }
+    return "invalid request";
 }
 
 static esp_err_t handle_save(httpd_req_t *req) {
-    char body[192];
+    char body[PORTAL_BODY_MAX];
     const int received = httpd_req_recv(req, body, sizeof(body) - 1);
     if (received <= 0) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty body");
     }
     body[received] = '\0';
 
-    char ssid[40] = {0};
-    char pass[72] = {0};
-    const prov_result_t parsed =
-        prov_parse_form(body, (size_t)received, ssid, sizeof ssid, pass, sizeof pass);
+    prov_settings_t settings;
+    const prov_result_t parsed = prov_parse_settings_form(body, (size_t)received, &settings);
     if (parsed != PROV_OK) {
-        const char *message = "invalid request";
-        if (parsed == PROV_ERR_SSID) message = "wifi name must be 1-32 bytes";
-        if (parsed == PROV_ERR_PASS) message = "password must be 8-63 bytes or empty";
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, message);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, message_for(parsed));
     }
 
-    const esp_err_t err = net_save_credentials(ssid, pass);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "凭证保存失败: %s", esp_err_to_name(err));
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cannot store credentials");
+    bool applied = true;
+    for (int i = 0; i < PLACE_COUNT; i++) {
+        if (!places_set(i, settings.name[i], settings.lat_deg[i], settings.lon_deg[i])) {
+            applied = false;
+        }
+    }
+    if (!places_set_tz(settings.tz_offset_min)) applied = false;
+
+    if (!applied) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "place rejected");
     }
 
-    ESP_LOGI(TAG, "凭证已保存，准备重启");
-    s_provisioned = true;
+    const esp_err_t store_err = places_store_save();
+    if (store_err != ESP_OK) {
+        ESP_LOGE(TAG, "坐标保存失败: %s", esp_err_to_name(store_err));
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cannot store places");
+    }
+
+    if (settings.has_wifi) {
+        const esp_err_t cred_err = net_save_credentials(settings.ssid, settings.pass);
+        if (cred_err != ESP_OK) {
+            ESP_LOGE(TAG, "凭证保存失败: %s", esp_err_to_name(cred_err));
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                       "cannot store credentials");
+        }
+    }
+
+    ESP_LOGI(TAG, "设置已保存，准备重启");
+    s_saved = true;
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, SAVED_PAGE, HTTPD_RESP_USE_STRLEN);
 }
@@ -299,7 +403,7 @@ static esp_err_t start_httpd(void) {
     return err;
 }
 
-esp_err_t net_start_provisioning(uint32_t timeout_ms, net_cancel_cb_t cancel) {
+esp_err_t net_start_portal(uint32_t timeout_ms, net_cancel_cb_t cancel) {
     esp_err_t err = net_boot();
     if (err != ESP_OK) return err;
 
@@ -325,21 +429,21 @@ esp_err_t net_start_provisioning(uint32_t timeout_ms, net_cancel_cb_t cancel) {
 
     err = start_httpd();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "配置页启动失败: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "设置页启动失败: %s", esp_err_to_name(err));
         return err;
     }
 
-    s_provisioned = false;
+    s_saved = false;
     for (uint32_t waited = 0; waited < timeout_ms; waited += POLL_PERIOD_MS) {
         if (cancel != NULL && cancel()) return ESP_ERR_INVALID_STATE;
-        if (s_provisioned) {
+        if (s_saved) {
             // 让 HTTP 响应先发出去，再重启进 STA 流程。
             vTaskDelay(pdMS_TO_TICKS(500));
             esp_restart();
         }
         vTaskDelay(pdMS_TO_TICKS(POLL_PERIOD_MS));
     }
-    ESP_LOGW(TAG, "配网超时 (%" PRIu32 " ms)", timeout_ms);
+    ESP_LOGW(TAG, "设置页超时 (%" PRIu32 " ms)", timeout_ms);
     return ESP_ERR_TIMEOUT;
 }
 

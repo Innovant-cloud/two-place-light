@@ -95,6 +95,66 @@ int main(void) {
         assert(strcmp(tiny, "ab") == 0);
     }
 
+    // 设置页表单：两座城市 + 时区，Wi-Fi 部分可选。
+    {
+        prov_settings_t st;
+        const char *full =
+            "n0=QINGDAO&la0=36.07&lo0=120.38&n1=BEIJING&la1=39.9&lo1=116.41&tz=480"
+            "&ssid=Home&pass=12345678";
+        assert(prov_parse_settings_form(full, strlen(full), &st) == PROV_OK);
+        assert(strcmp(st.name[0], "QINGDAO") == 0);
+        assert(strcmp(st.name[1], "BEIJING") == 0);
+        assert(st.lat_deg[0] > 36.06 && st.lat_deg[0] < 36.08);
+        assert(st.lon_deg[1] > 116.40 && st.lon_deg[1] < 116.42);
+        assert(st.tz_offset_min == 480);
+        assert(st.has_wifi);
+        assert(strcmp(st.ssid, "Home") == 0);
+        assert(strcmp(st.pass, "12345678") == 0);
+
+        // ssid 留空 = 不改 Wi-Fi，但城市照改。
+        const char *no_wifi = "n0=A&la0=1&lo0=2&n1=B&la1=3&lo1=4&tz=480&ssid=&pass=";
+        assert(prov_parse_settings_form(no_wifi, strlen(no_wifi), &st) == PROV_OK);
+        assert(!st.has_wifi);
+
+        // ssid 字段整个缺席也一样：沿用现有凭证。
+        const char *no_ssid_field = "n0=A&la0=1&lo0=2&n1=B&la1=3&lo1=4&tz=480";
+        assert(prov_parse_settings_form(no_ssid_field, strlen(no_ssid_field), &st) == PROV_OK);
+        assert(!st.has_wifi);
+
+        // 名字里的加号要还原成空格。
+        const char *spaced = "n0=NEW+PORT&la0=1&lo0=2&n1=B&la1=3&lo1=4&tz=480";
+        assert(prov_parse_settings_form(spaced, strlen(spaced), &st) == PROV_OK);
+        assert(strcmp(st.name[0], "NEW PORT") == 0);
+
+        // 负经度、负时区都要能过。
+        const char *west = "n0=LIMA&la0=-12.05&lo0=-77.04&n1=UTC&la1=0&lo1=0&tz=-300";
+        assert(prov_parse_settings_form(west, strlen(west), &st) == PROV_OK);
+        assert(st.lat_deg[0] < -12.04);
+        assert(st.lon_deg[0] < -77.03);
+        assert(st.tz_offset_min == -300);
+
+        // 越界与非法输入逐条拒绝。
+        const char *bad_lat = "n0=A&la0=91&lo0=2&n1=B&la1=3&lo1=4&tz=480";
+        assert(prov_parse_settings_form(bad_lat, strlen(bad_lat), &st) == PROV_ERR_PLACE);
+        const char *bad_lon = "n0=A&la0=1&lo0=-181&n1=B&la1=3&lo1=4&tz=480";
+        assert(prov_parse_settings_form(bad_lon, strlen(bad_lon), &st) == PROV_ERR_PLACE);
+        const char *not_a_number = "n0=A&la0=north&lo0=2&n1=B&la1=3&lo1=4&tz=480";
+        assert(prov_parse_settings_form(not_a_number, strlen(not_a_number), &st) ==
+               PROV_ERR_PLACE);
+        const char *bad_tz = "n0=A&la0=1&lo0=2&n1=B&la1=3&lo1=4&tz=481";
+        assert(prov_parse_settings_form(bad_tz, strlen(bad_tz), &st) == PROV_ERR_TZ);
+        // 中文城市名（UTF-8）没有字形，必须在解析阶段就挡掉。
+        const char *chinese = "n0=%E5%8C%97%E4%BA%AC&la0=1&lo0=2&n1=B&la1=3&lo1=4&tz=480";
+        assert(prov_parse_settings_form(chinese, strlen(chinese), &st) == PROV_ERR_PLACE);
+        const char *missing_tz = "n0=A&la0=1&lo0=2&n1=B&la1=3&lo1=4";
+        assert(prov_parse_settings_form(missing_tz, strlen(missing_tz), &st) ==
+               PROV_ERR_FORMAT);
+        // 填了 Wi-Fi 名但密码太短：仍然是 WPA2 规则。
+        const char *short_pass =
+            "n0=A&la0=1&lo0=2&n1=B&la1=3&lo1=4&tz=480&ssid=Home&pass=short";
+        assert(prov_parse_settings_form(short_pass, strlen(short_pass), &st) == PROV_ERR_PASS);
+    }
+
     (void)printf("test_prov_parse: PASS\n");
     return 0;
 }

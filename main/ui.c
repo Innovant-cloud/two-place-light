@@ -35,7 +35,9 @@
 #define EL_CLAMP 56.0
 #define ARC_SAMPLES 97 // 全天 24 小时，每 15 分钟一个采样点
 
-#define VIEW_HINT "UP/DN PAGE   OK DIM   HOLD OFF"
+// 一行放不下：240 px 宽的面板里 montserrat_14 最多约 26 个大写字母。
+// 两行版本会往上顶到图例（实机确认压住了 TIANJIN 那行），所以压成一行短的。
+#define VIEW_HINT "UP/DN  OK DIM  HOLD OFF"
 
 static app_view_t s_view = APP_VIEW_ARC;
 static bool s_setup_mode;
@@ -46,9 +48,9 @@ static lv_obj_t *s_scr;
 static lv_obj_t *s_clock_lbl;
 static lv_obj_t *s_batt_lbl;
 
-static lv_obj_t *s_arc_line;
-static lv_point_precise_t s_arc_pts[ARC_SAMPLES];
-static lv_obj_t *s_dot[PLACE_COUNT];
+static lv_obj_t *s_arc_line[PLACE_COUNT];
+static lv_point_precise_t s_arc_pts[PLACE_COUNT][ARC_SAMPLES];
+static lv_obj_t *s_now_marker;
 static lv_obj_t *s_place_lbl[PLACE_COUNT];
 static lv_obj_t *s_arc_summary;
 static int64_t s_arc_day_midnight = INT64_MIN;
@@ -75,20 +77,8 @@ static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font, uint32_t co
     return lbl;
 }
 
-static lv_obj_t *make_dot(lv_obj_t *parent, uint32_t color, bool filled) {
-    lv_obj_t *dot = lv_obj_create(parent);
-    lv_obj_remove_style_all(dot);
-    lv_obj_set_size(dot, 9, 9);
-    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(dot, 2, 0);
-    lv_obj_set_style_border_color(dot, lv_color_hex(color), 0);
-    lv_obj_set_style_border_opa(dot, LV_OPA_COVER, 0);
-    if (filled) {
-        lv_obj_set_style_bg_color(dot, lv_color_hex(color), 0);
-        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-    }
-    return dot;
-}
+// 运行时坐标（可能在设置页被改过）。调用方只传合法索引，所以不需要判空分支。
+static const place_t *place_ptr(int index) { return places_get(index); }
 
 static lv_obj_t *base_screen(void) {
     lv_obj_t *scr = lv_obj_create(NULL);
@@ -127,6 +117,7 @@ static void add_header(lv_obj_t *scr, const char *title) {
 static void add_footer_hint(lv_obj_t *scr) {
     lv_obj_t *hint = make_label(scr, &lv_font_montserrat_14, COL_DIM);
     lv_label_set_text(hint, VIEW_HINT);
+    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -8);
 }
 
@@ -141,16 +132,16 @@ typedef struct {
 static bool today_load(today_t *out) {
     const int64_t now = app_clock_now();
     if (now < APP_CLOCK_VALID_FROM) return false;
-    out->midnight_utc = civil_time_local_midnight(now, PLACE_TZ_OFFSET_MIN);
-    out->now_min = civil_time_minutes_of_day(now, PLACE_TZ_OFFSET_MIN);
-    solar_compute_day(out->midnight_utc, PLACES[PLACE_WEIHAI].lat_deg, PLACES[PLACE_WEIHAI].lon_deg,
-                      PLACE_TZ_OFFSET_MIN, &out->day);
+    out->midnight_utc = civil_time_local_midnight(now, places_tz_offset_min());
+    out->now_min = civil_time_minutes_of_day(now, places_tz_offset_min());
+    solar_compute_day(out->midnight_utc, place_ptr(PLACE_PRIMARY)->lat_deg, place_ptr(PLACE_PRIMARY)->lon_deg,
+                      places_tz_offset_min(), &out->day);
     return true;
 }
 
 static double elevation_now(int place_index) {
-    return solar_elevation_deg(app_clock_now(), PLACES[place_index].lat_deg,
-                               PLACES[place_index].lon_deg);
+    return solar_elevation_deg(app_clock_now(), place_ptr(place_index)->lat_deg,
+                               place_ptr(place_index)->lon_deg);
 }
 
 static int plot_y(double elevation_deg) {
@@ -186,16 +177,27 @@ static void arc_build(void) {
     lv_obj_set_style_bg_color(horizon, lv_color_hex(COL_HORIZON), 0);
     lv_obj_set_style_bg_opa(horizon, LV_OPA_COVER, 0);
 
-    s_arc_line = lv_line_create(s_scr);
-    lv_obj_set_style_line_width(s_arc_line, 2, 0);
-    lv_obj_set_style_line_color(s_arc_line, lv_color_hex(COL_DIM), 0);
-    lv_obj_set_style_line_rounded(s_arc_line, true, 0);
+    // 两条曲线：威海(蓝)在前、天津(橙)在后。两城差着一度半纬度，曲线之间
+    // 的那道缝就是"光差"——首页一眼能看出来的东西。
+    for (int i = 0; i < PLACE_COUNT; i++) {
+        const uint32_t color = i == PLACE_PRIMARY ? COL_WEIHAI : COL_TIANJIN;
+        s_arc_line[i] = lv_line_create(s_scr);
+        lv_obj_set_style_line_width(s_arc_line[i], 2, 0);
+        lv_obj_set_style_line_color(s_arc_line[i], lv_color_hex(color), 0);
+        lv_obj_set_style_line_rounded(s_arc_line[i], true, 0);
+    }
+
+    // 两城共用同一个时区，所以同一时刻的 x 永远相同；原先每城一个点会完全
+    // 重叠成"一个"点。改画一根竖直的"现在"参考线，位置由 x 表达，高低由曲线表达。
+    s_now_marker = lv_obj_create(s_scr);
+    lv_obj_remove_style_all(s_now_marker);
+    lv_obj_set_size(s_now_marker, 1, PLOT_Y1 - PLOT_Y0);
+    lv_obj_set_style_bg_color(s_now_marker, lv_color_hex(COL_INK), 0);
+    lv_obj_set_style_bg_opa(s_now_marker, LV_OPA_30, 0);
 
     for (int i = 0; i < PLACE_COUNT; i++) {
-        const uint32_t color = i == PLACE_WEIHAI ? COL_WEIHAI : COL_TIANJIN;
-        s_dot[i] = make_dot(s_scr, color, i == PLACE_WEIHAI);
+        const uint32_t color = i == PLACE_PRIMARY ? COL_WEIHAI : COL_TIANJIN;
         s_place_lbl[i] = make_label(s_scr, &lv_font_montserrat_14, color);
-        // 前缀就是图例：* = 实心点(威海)，o = 空心点(天津)，省出一行地方。
         lv_obj_set_pos(s_place_lbl[i], PLOT_X0, 252 + i * 18);
     }
 
@@ -205,25 +207,24 @@ static void arc_build(void) {
 
 static void arc_update(const today_t *t) {
     if (t->midnight_utc != s_arc_day_midnight) {
-        for (int i = 0; i < ARC_SAMPLES; i++) {
-            const int minutes = i * 1440 / (ARC_SAMPLES - 1);
-            const int64_t utc = t->midnight_utc + (int64_t)minutes * 60;
-            const double el = solar_elevation_deg(utc, PLACES[PLACE_WEIHAI].lat_deg,
-                                                  PLACES[PLACE_WEIHAI].lon_deg);
-            s_arc_pts[i].x = plot_x(minutes);
-            s_arc_pts[i].y = plot_y(el);
+        for (int i = 0; i < PLACE_COUNT; i++) {
+            for (int k = 0; k < ARC_SAMPLES; k++) {
+                const int minutes = k * 1440 / (ARC_SAMPLES - 1);
+                const int64_t utc = t->midnight_utc + (int64_t)minutes * 60;
+                const double el = solar_elevation_deg(utc, place_ptr(i)->lat_deg, place_ptr(i)->lon_deg);
+                s_arc_pts[i][k].x = plot_x(minutes);
+                s_arc_pts[i][k].y = plot_y(el);
+            }
+            lv_line_set_points(s_arc_line[i], s_arc_pts[i], ARC_SAMPLES);
         }
-        lv_line_set_points(s_arc_line, s_arc_pts, ARC_SAMPLES);
         s_arc_day_midnight = t->midnight_utc;
     }
 
+    lv_obj_set_pos(s_now_marker, plot_x(t->now_min), PLOT_Y0);
+
     char buf[48];
-    const int dot_x = plot_x(t->now_min);
     for (int i = 0; i < PLACE_COUNT; i++) {
-        const double el = elevation_now(i);
-        lv_obj_set_pos(s_dot[i], dot_x - 4, plot_y(el) - 4);
-        (void)snprintf(buf, sizeof buf, "%c %s %+.1f", i == PLACE_WEIHAI ? '*' : 'o',
-                       PLACES[i].name, el);
+        (void)snprintf(buf, sizeof buf, "%s %+.1f", place_ptr(i)->name, elevation_now(i));
         lv_label_set_text(s_place_lbl[i], buf);
     }
 
@@ -243,11 +244,11 @@ static void pair_build(void) {
     begin_screen();
     add_header(s_scr, "TWO-PLACE LIGHT");
     for (int i = 0; i < PLACE_COUNT; i++) {
-        const uint32_t color = i == PLACE_WEIHAI ? COL_WEIHAI : COL_TIANJIN;
+        const uint32_t color = i == PLACE_PRIMARY ? COL_WEIHAI : COL_TIANJIN;
         const int y = 84 + i * 88;
 
         lv_obj_t *name = make_label(s_scr, &lv_font_montserrat_14, color);
-        lv_label_set_text(name, PLACES[i].name);
+        lv_label_set_text(name, place_ptr(i)->name);
         lv_obj_set_pos(name, 16, y);
 
         s_pair_big[i] = make_label(s_scr, &lv_font_montserrat_20, COL_INK);
@@ -275,8 +276,8 @@ static void pair_update(const today_t *t) {
         lv_label_set_text(s_pair_big[i], buf);
 
         solar_day_t day;
-        solar_compute_day(t->midnight_utc, PLACES[i].lat_deg, PLACES[i].lon_deg,
-                          PLACE_TZ_OFFSET_MIN, &day);
+        solar_compute_day(t->midnight_utc, place_ptr(i)->lat_deg, place_ptr(i)->lon_deg,
+                          places_tz_offset_min(), &day);
         char rise[8];
         char set[8];
         format_hhmm(rise, sizeof rise, day.rise_min);
@@ -285,14 +286,14 @@ static void pair_update(const today_t *t) {
         lv_label_set_text(s_pair_sub[i], buf);
     }
 
-    const double delta = el[PLACE_WEIHAI] - el[PLACE_TIANJIN];
+    const double delta = el[PLACE_PRIMARY] - el[PLACE_SECONDARY];
     if (fabs(delta) < 0.1) {
         lv_label_set_text(s_pair_delta, "SAME LIGHT");
         lv_obj_set_style_text_color(s_pair_delta, lv_color_hex(COL_DIM), 0);
     } else {
         const bool haihigher = delta > 0.0;
-        (void)snprintf(buf, sizeof buf, "%s %+.1f DEG HIGHER",
-                       haihigher ? PLACES[PLACE_WEIHAI].name : PLACES[PLACE_TIANJIN].name,
+        (void)snprintf(buf, sizeof buf, "%s %+.1f HIGHER",
+                       haihigher ? place_ptr(PLACE_PRIMARY)->name : place_ptr(PLACE_SECONDARY)->name,
                        fabs(delta));
         lv_label_set_text(s_pair_delta, buf);
         lv_obj_set_style_text_color(s_pair_delta,
@@ -350,8 +351,8 @@ static void left_update(const today_t *t) {
 
     // 明天比今天多/少多少光：这是这台设备最想说的一句话。
     solar_day_t tomorrow;
-    solar_compute_day(t->midnight_utc + 86400, PLACES[PLACE_WEIHAI].lat_deg,
-                      PLACES[PLACE_WEIHAI].lon_deg, PLACE_TZ_OFFSET_MIN, &tomorrow);
+    solar_compute_day(t->midnight_utc + 86400, place_ptr(PLACE_PRIMARY)->lat_deg,
+                      place_ptr(PLACE_PRIMARY)->lon_deg, places_tz_offset_min(), &tomorrow);
     const int tomorrow_len = solar_minutes_of_day(tomorrow.day_length_min);
     const int delta_min = (int)lround(tomorrow.day_length_min - t->day.day_length_min);
     (void)snprintf(buf, sizeof buf, "TOMORROW %dh%02d   %+d MIN", tomorrow_len / 60,
@@ -416,7 +417,9 @@ static void setup_update(void) {
 
 // ---------------------------------------------------------------- 联网页
 
-static void net_build(const char *title, const char *line1, const char *line2) {
+// 联网 / 设置页共用这一屏：标题 + 两行说明 + 底部提示（提示可以省略）。
+static void net_build(const char *title, const char *line1, const char *line2,
+                      const char *hint_text) {
     begin_screen();
     add_header(s_scr, title);
 
@@ -430,14 +433,17 @@ static void net_build(const char *title, const char *line1, const char *line2) {
     lv_obj_set_style_text_align(s_net_l2, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_net_l2, LV_ALIGN_TOP_MID, 0, 156);
 
-    lv_obj_t *hint = make_label(s_scr, &lv_font_montserrat_14, COL_DIM);
-    lv_label_set_text(hint, "HOLD OK: MANUAL SET");
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -8);
+    if (hint_text != NULL && hint_text[0] != '\0') {
+        lv_obj_t *hint = make_label(s_scr, &lv_font_montserrat_14, COL_DIM);
+        lv_label_set_text(hint, hint_text);
+        lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -8);
+    }
 }
 
-void ui_show_net(const char *title, const char *line1, const char *line2) {
+void ui_show_net(const char *title, const char *line1, const char *line2, const char *hint) {
     s_net_mode = true;
-    net_build(title, line1, line2);
+    net_build(title, line1, line2, hint);
 }
 
 // ---------------------------------------------------------------- 公共入口
@@ -498,7 +504,7 @@ void ui_refresh(void) {
     if (now < APP_CLOCK_VALID_FROM) {
         (void)snprintf(clock, sizeof clock, "--:--");
     } else {
-        const int minutes = civil_time_minutes_of_day(now, PLACE_TZ_OFFSET_MIN);
+        const int minutes = civil_time_minutes_of_day(now, places_tz_offset_min());
         (void)snprintf(clock, sizeof clock, "%02d:%02d", minutes / 60, minutes % 60);
     }
     lv_label_set_text(s_clock_lbl, clock);

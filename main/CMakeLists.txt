@@ -3,6 +3,7 @@ idf_component_register(
          "solar.c"
          "civil_time.c"
          "places.c"
+    "places_store.c"
          "app_clock.c"
          "app_state.c"
          "app_setup.c"

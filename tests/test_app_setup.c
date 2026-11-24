@@ -6,7 +6,7 @@
 #include "civil_time.h"
 #include "places.h"
 
-#define TZ PLACE_TZ_OFFSET_MIN
+#define TZ PLACES_DEFAULT_TZ_OFFSET_MIN
 
 static void press(app_setup_t *s, app_key_t key, int times) {
     for (int i = 0; i < times; i++) {

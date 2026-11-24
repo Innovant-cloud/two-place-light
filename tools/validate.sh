@@ -93,7 +93,11 @@ run_static_checks() {
         -o "${test_dir}/test_app_setup"
     "${test_dir}/test_app_setup"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
-        tests/test_prov_parse.c main/prov_parse.c \
+        tests/test_places.c main/places.c \
+        -o "${test_dir}/test_places"
+    "${test_dir}/test_places"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_prov_parse.c main/prov_parse.c main/places.c \
         -o "${test_dir}/test_prov_parse"
     "${test_dir}/test_prov_parse"
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_battery_profile.py

@@ -34,7 +34,7 @@ void app_setup_begin(app_setup_t *s, int64_t hint_epoch) {
     s->field = SETUP_FIELD_YEAR;
 
     if (hint_epoch >= CIVIL_TIME_VALID_FROM_EPOCH) {
-        civil_time_local_fields(hint_epoch, PLACE_TZ_OFFSET_MIN, &s->year, &s->month, &s->day,
+        civil_time_local_fields(hint_epoch, places_tz_offset_min(), &s->year, &s->month, &s->day,
                                 &s->hour, &s->minute);
     } else {
         s->year = SETUP_PLACEHOLDER_YEAR;
@@ -49,7 +49,7 @@ void app_setup_begin(app_setup_t *s, int64_t hint_epoch) {
 bool app_setup_epoch(const app_setup_t *s, int64_t *out_epoch) {
     if (s == NULL || out_epoch == NULL) return false;
     return civil_time_epoch_from_fields(s->year, s->month, s->day, s->hour, s->minute,
-                                        PLACE_TZ_OFFSET_MIN, out_epoch);
+                                        places_tz_offset_min(), out_epoch);
 }
 
 static void adjust_field(app_setup_t *s, int delta) {

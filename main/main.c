@@ -4,10 +4,12 @@
 // 放在同一块 240x320 的屏上。全部计算在本地完成，不依赖网络；网络只用来对时。
 //
 // 启动顺序（时间优先）：
-//   1. RTC 里已有可信时间 -> 直接进主界面。
+//   1. RTC 里已有可信时间 -> 先在有凭证时校一次时，再进主界面。
 //   2. 没有可信时间 -> 有 Wi-Fi 凭证就先连、再 SNTP 对时。
-//   3. 没凭证或连不上 -> 开 SoftAP，手机打开 192.168.4.1 填 Wi-Fi。
+//   3. 没凭证或连不上 -> 开设置热点，手机打开 192.168.4.1 填城市与 Wi-Fi。
 //   4. 任何一步长按确定 -> 放弃联网，改用三键手动对时。
+//
+// 运行中：每 6 小时后台静默校时；长按下键随时打开设置热点。
 //
 // LVGL 非线程安全：所有 lv_* 调用要么在刷新定时器里（LVGL 任务内），
 // 要么持有 bsp_lvgl_lock()。
@@ -28,6 +30,8 @@
 #include "freertos/task.h"
 #include "lvgl.h"
 #include "net_time.h"
+#include "places.h"
+#include "places_store.h"
 #include "net_wifi.h"
 #include "nvs_flash.h"
 #include "ui.h"
@@ -41,6 +45,8 @@ static const char *TAG = "two_place_light";
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define SNTP_TIMEOUT_MS 8000
 #define PROVISIONING_TIMEOUT_MS (3 * 60 * 1000)
+#define SETTINGS_PORTAL_TIMEOUT_MS (5 * 60 * 1000)
+#define RESYNC_PERIOD_MS (6 * 60 * 60 * 1000)
 
 typedef struct {
     bsp_btn_t btn;
@@ -72,9 +78,10 @@ static void show_setup_locked(void) {
     }
 }
 
-static void show_net_locked(const char *title, const char *line1, const char *line2) {
+static void show_net_locked(const char *title, const char *line1, const char *line2,
+                            const char *hint) {
     if (bsp_lvgl_lock(LVGL_LOCK_TIMEOUT_MS)) {
-        ui_show_net(title, line1, line2);
+        ui_show_net(title, line1, line2, hint);
         bsp_lvgl_unlock();
     }
 }
@@ -88,11 +95,11 @@ static void acquire_time(void) {
     s_manual_requested = false;
 
     if (net_has_credentials()) {
-        show_net_locked("NO TIME", "CONNECTING WI-FI", "");
+        show_net_locked("NO TIME", "CONNECTING WI-FI", "", "HOLD OK: MANUAL SET");
         if (net_connect_sta(WIFI_CONNECT_TIMEOUT_MS, cancel_requested) == ESP_OK) {
-            show_net_locked("WI-FI OK", "SYNCING TIME", "");
+            show_net_locked("WI-FI OK", "SYNCING TIME", "", "HOLD OK: MANUAL SET");
             if (net_time_sync(SNTP_TIMEOUT_MS) == ESP_OK) {
-                show_net_locked("TIME OK", "SET FROM NETWORK", "");
+                show_net_locked("TIME OK", "SET FROM NETWORK", "", "HOLD OK: MANUAL SET");
                 net_stop();
                 return;
             }
@@ -104,15 +111,75 @@ static void acquire_time(void) {
         ESP_LOGI(TAG, "没有 Wi-Fi 凭证，进入配网");
     }
 
-    show_net_locked("SETUP WI-FI", "JOIN: TwoPlaceLight", "OPEN 192.168.4.1");
+    show_net_locked("SETUP WI-FI", "JOIN: TwoPlaceLight", "OPEN 192.168.4.1",
+                    "HOLD OK: MANUAL SET");
     // 提交成功后本函数内部重启设备，不会返回；这里只处理超时与中止。
-    const esp_err_t prov = net_start_provisioning(PROVISIONING_TIMEOUT_MS, cancel_requested);
+    const esp_err_t prov = net_start_portal(PROVISIONING_TIMEOUT_MS, cancel_requested);
     if (prov == ESP_ERR_INVALID_STATE) {
         ESP_LOGI(TAG, "用户要求手动对时");
     } else {
         ESP_LOGW(TAG, "配网未完成: %s", esp_err_to_name(prov));
     }
     net_stop();
+}
+
+// 时间已经有过、但可能已经跑偏：RTC 走的是片内 RC，没有 32.768 kHz 晶振，
+// 放一天就能偏出肉眼可见的分钟数。这里做一次静默校准——对不上就继续用旧时间，
+// 绝不因为校时失败把设备卡在联网页上。
+static void resync_time(bool show_progress) {
+    if (!net_has_credentials()) return;
+    if (show_progress) {
+        show_net_locked("TIME", "SYNCING", "", NULL);
+    }
+    if (net_connect_sta(WIFI_CONNECT_TIMEOUT_MS, NULL) != ESP_OK) {
+        net_stop();
+        return;
+    }
+    if (net_time_sync(SNTP_TIMEOUT_MS) != ESP_OK) {
+        ESP_LOGW(TAG, "校时失败，继续用旧时间");
+    }
+    net_stop();
+}
+
+static void resync_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(RESYNC_PERIOD_MS));
+        resync_time(false);
+    }
+}
+
+// ------------------------------------------------------------------ 设置热点
+
+// 长按 `下` 随叫随开：屏幕上给出热点名和地址，按任意键关掉。
+// 抢时间阶段（时钟还不可信）不允许打断，免得把配网流程顶掉。
+static volatile bool s_portal_active;
+static volatile bool s_portal_cancel;
+
+static bool portal_cancel_requested(void) { return s_portal_cancel; }
+
+static void settings_task(void *arg) {
+    (void)arg;
+    show_net_locked("SETTINGS", "JOIN: TwoPlaceLight", "OPEN 192.168.4.1", "ANY KEY  CLOSE");
+    const esp_err_t err = net_start_portal(SETTINGS_PORTAL_TIMEOUT_MS, portal_cancel_requested);
+    net_stop();
+    s_portal_active = false;
+    s_portal_cancel = false;
+    if (err == ESP_ERR_TIMEOUT || err == ESP_ERR_INVALID_STATE) {
+        // 保存成功时 net_start_portal() 内部会重启，走不到这里。
+        show_view_locked(s_state.view);
+    }
+    vTaskDelete(NULL);
+}
+
+static void open_settings_portal(void) {
+    if (s_portal_active || s_setup.active || !app_clock_is_set()) return;
+    s_portal_cancel = false;
+    s_portal_active = true;
+    if (xTaskCreate(settings_task, "tpl_settings", 4096, NULL, 4, NULL) != pdPASS) {
+        s_portal_active = false;
+        ESP_LOGE(TAG, "设置热点任务创建失败");
+    }
 }
 
 // 对时页结束后的去向：时间有效就进主界面，否则留在对时页。
@@ -203,6 +270,16 @@ static void input_task(void *arg) {
     raw_input_t raw;
     for (;;) {
         if (xQueueReceive(s_input_queue, &raw, portMAX_DELAY) == pdTRUE) {
+            // 设置热点开着的时候，任意键都只做一件事：关掉它。
+            if (s_portal_active) {
+                s_portal_cancel = true;
+                continue;
+            }
+            // 长按下键 = 打开设置热点（换城市/换 Wi-Fi），不进 app_state 的语义。
+            if (raw.ev == BSP_BTN_LONG && raw.btn == BSP_BTN_DOWN) {
+                open_settings_portal();
+                continue;
+            }
             app_key_t key;
             if (translate(&raw, &key)) {
                 handle_key(key);
@@ -252,6 +329,11 @@ void app_main(void) {
     bsp_display_backlight(100);
 
     (void)app_clock_init();
+    // 坐标与时区来自 NVS（设置页写的）；没有记录就用出厂默认的威海/天津。
+    const esp_err_t places_err = places_store_load();
+    if (places_err != ESP_OK) {
+        ESP_LOGW(TAG, "坐标读取失败(%s)，使用默认值", esp_err_to_name(places_err));
+    }
     const esp_err_t battery_err = bsp_battery_init();
     if (battery_err != ESP_OK) {
         ESP_LOGW(TAG, "电量计不可用(%s)，界面显示 B--", esp_err_to_name(battery_err));
@@ -276,6 +358,9 @@ void app_main(void) {
 
     if (!app_clock_is_set()) {
         acquire_time();
+    } else {
+        // 重置或刷机后 RTC 里的时间会保留下来，但可能已经跑偏；有凭证就先校一次。
+        resync_time(true);
     }
 
     if (app_clock_is_set()) {
@@ -289,6 +374,10 @@ void app_main(void) {
     if (bsp_lvgl_lock(LVGL_LOCK_TIMEOUT_MS)) {
         (void)lv_timer_create(refresh_timer_cb, REFRESH_PERIOD_MS, NULL);
         bsp_lvgl_unlock();
+    }
+
+    if (xTaskCreate(resync_task, "tpl_resync", 4096, NULL, 3, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "定期对时任务创建失败，时间只能靠 RTC 自己走");
     }
 
     ESP_LOGI(TAG, "就绪：Battery=%s Clock=%s WiFi creds=%s",
