@@ -84,7 +84,9 @@ RTC 慢速时钟走的是片内 RC 振荡器（板上没有 32.768 kHz 晶振）
 - 没有网络时的可信走时：没有 Wi-Fi 时只剩 RC 推出来的 RTC，两次手动对时之间的误差没有上限。
 - 真正的空闲深睡眠（`bsp_display_prepare_deep_sleep` + `bsp_button_prepare_deep_sleep`，
   以及 `main/key_guard.h` 里的唤醒键屏蔽）。注意：长按 `确定` 只是关屏（息屏），CPU 与 Wi-Fi
-  仍在跑，所以那不等于省电——只是看不见。
+  仍在跑，所以那不等于省电——只是看不见。本应用完全没有深睡路径，因此上游那条
+  `tests/test_key_wake_contract.py`（静态检查 `main.c` 里唤醒键守卫接线的契约测试）一并去掉；
+  `main/key_guard.h` 与 `tests/test_key_guard.c` 保留，留给以后的睡眠实现。
 - 跨时区的两座城市（目前两地共用一个 UTC 偏移）。
 - 背光档位跨重启保存。
 - 中文标签；加之前先过一遍字体检查清单。

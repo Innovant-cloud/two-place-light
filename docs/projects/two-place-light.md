@@ -97,7 +97,10 @@ compiled: derivative applications must ship their own UI.
   RTC, so drift is unbounded between manual set-time sessions.
 - Real idle deep sleep (`bsp_display_prepare_deep_sleep` + `bsp_button_prepare_deep_sleep` +
   the key-wake guard in `main/key_guard.h`). Note that holding `OK` only blanks the screen: the
-  CPU and Wi-Fi keep running, so it saves no power, it just hides the output.
+  CPU and Wi-Fi keep running, so it saves no power, it just hides the output. Because this
+  application has no deep-sleep path at all, the upstream `tests/test_key_wake_contract.py`
+  (a static contract that greps `main.c` for the wake-key guard wiring) was removed together
+  with it; `main/key_guard.h` and `tests/test_key_guard.c` are kept for the eventual sleep work.
 - Two places in different time zones (they share one UTC offset).
 - Persisting the backlight step across reboots.
 - Chinese labels; see the font checklist before adding any.
